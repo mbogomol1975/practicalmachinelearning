@@ -1,0 +1,83 @@
+---
+title: "Practical Machine Learning Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+## Summary
+
+The goal of this project is to predict the manner in which the exercises were performed by different subjects. 
+
+This is the "classe" variable in the training set. You may use any of the other variables to predict with.
+
+## How the model is built
+To create a model, I first performed an explanatory analysis of the data. 
+```{r}
+trainProj<-read.csv("pml-training.csv", na.strings= c("NA", " ", ""))
+dim(trainProj)
+isNA<-colSums(is.na(trainProj))
+isNotNA<-isNA[isNA==0]
+trainNotNA<-trainProj[names(isNotNA)]
+trainSet<-trainNotNA[,-c(1:7)]
+```
+The analysis showed that there are `r ncol(trainProj)-length(isNotNA)` variables with 19,216 missing values in each column, out of `r nrow(trainProj)`. With `r round(19216*100/nrow(trainProj),2)`% of the data missing for these variables, these variables were removed as predictors. The variables related to time and users (columns 1 to 7) were also removed as predictors, since they do not add information about the performance of an activity.
+
+The new training set has `r ncol(trainSet)` variables.
+
+# Training the model on training set
+I have used random forest algorithm with 10-fold cross validation method, repeated 3 times when training the machine learning algorithm. 
+```{r}
+library(caret)
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+seed <- 555
+metric <- "Accuracy"
+```
+
+I then used tuneRF function in randomForest package to find the best value for mtry that gives the smallest OOB error. 
+```{r rfBestMtry, cache=TRUE, fig.height=4, fig.width=4}
+library(randomForest)
+library(dplyr)
+require(fastmatch)
+n<-fmatch("classe",names(trainSet))
+x<-trainSet[,-n]
+y<-trainSet[,n]
+set.seed(seed)
+bestmtry <- tuneRF(x, y, stepFactor=1.5, improve=1e-5, ntree=500)
+print(bestmtry)
+```
+
+mtry = `r bestmtry[which(bestmtry[,2]==min(bestmtry[,2])),1]` gives the minimun OOB error = `r bestmtry[which(bestmtry[,2]==min(bestmtry[,2])),2]`.
+
+I then trained the model with this value of mtry.
+```{r rfModel, cache=TRUE}
+set.seed(seed)
+mtry <- bestmtry[which(bestmtry[,2]==min(bestmtry[,2])),1]
+tunegrid <- expand.grid(.mtry=mtry)
+rfModel <- train(x, y, data=trainSet, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+print(rfModel)
+print(rfModel$finalModel)
+```
+Calculating OOB:
+``` {r}
+computeOOBErrEst <- function (x)
+{
+  cm <- x$confusion
+  cm <- cm[, -ncol(cm)]
+  1 - sum(diag(cm)) / sum(cm)
+}
+rfOOB<-computeOOBErrEst(rfModel$finalModel)
+```
+
+Now test the model on the test set. First, transform the test set to get the same predictors used in training the model. 
+```{r}
+testProj<-read.csv("pml-testing.csv", na.strings= c("NA", " ", ""))
+testSet<-testProj[names(x)]
+predictions<-predict(rfModel,newdata = testSet)
+```
+ 
+# Out-of-sample error
+We can use the OOB errow to estimate the out-of-sample error, since OOB error is calculated on the samples not used in creating the given random forest. So the out-of-sample error is `r round(rfOOB,4)`. This model predicted the outcomes of the test set with 100% accuracy. 
+ 
